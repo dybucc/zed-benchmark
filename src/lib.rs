@@ -24,7 +24,7 @@ impl Hash for HashedEdit {
 
 #[inline]
 pub fn bench_modified(edits: Vec<Vec<(Edit, bool)>>) {
-    edits.into_iter().for_each(|edit| {
+    for edit in edits {
         let (edits, snippet_edits) = edit.into_iter().fold(
             (HashSet::default(), HashSet::default()),
             |(mut edits, mut snippet_edits), (edit, is_active_entry)| {
@@ -61,24 +61,24 @@ pub fn bench_modified(edits: Vec<Vec<(Edit, bool)>>) {
                 (edits, snippet_edits)
             },
         );
-    });
+    }
 }
 
 #[inline]
 pub fn bench_original(edits: Vec<Vec<(Edit, bool)>>) {
-    edits.into_iter().for_each(|edit| {
+    for edit in edits {
         let (mut edits, mut snippet_edits) = (vec![], vec![]);
 
         for (edit, is_active_entry) in edit {
             match edit {
                 Edit::Plain(edit) => {
                     if !edits.contains(&edit) {
-                        edits.push(edit)
+                        edits.push(edit);
                     }
                 }
                 Edit::Annotated(edit) => {
                     if !edits.contains(&edit.text_edit) {
-                        edits.push(edit.text_edit)
+                        edits.push(edit.text_edit);
                     }
                 }
                 Edit::Snippet(edit) => {
@@ -102,5 +102,5 @@ pub fn bench_original(edits: Vec<Vec<(Edit, bool)>>) {
                 }
             }
         }
-    });
+    }
 }

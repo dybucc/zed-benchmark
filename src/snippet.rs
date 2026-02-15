@@ -22,7 +22,7 @@ impl Snippet {
         parse_snippet(source, false, &mut text, &mut tabstops)
             .context("failed to parse snippet")?;
 
-        let len = text.len() as isize;
+        let len = text.len().cast_signed();
         let final_tabstop = tabstops.remove(&0);
         let mut tabstops = tabstops.into_values().collect::<Vec<_>>();
 
@@ -75,10 +75,9 @@ fn parse_snippet<'a>(
             Some('}') => {
                 if nested {
                     return Ok(source);
-                } else {
-                    text.push('}');
-                    source = &source[1..];
                 }
+                text.push('}');
+                source = &source[1..];
             }
             Some(_) => {
                 let chunk_end = source.find(['}', '$', '\\']).unwrap_or(source.len());
@@ -104,7 +103,7 @@ fn parse_tabstop<'a>(
         tabstop_index = index;
         source = rest;
 
-        if source.starts_with("|") {
+        if source.starts_with('|') {
             (source, choices) = parse_choices(&source[1..], text)?;
         }
 
@@ -126,11 +125,11 @@ fn parse_tabstop<'a>(
     tabstops
         .entry(tabstop_index)
         .or_insert_with(|| TabStop {
-            ranges: Default::default(),
+            ranges: SmallVec::default(),
             choices,
         })
         .ranges
-        .push(tabstop_start as isize..text.len() as isize);
+        .push(tabstop_start.cast_signed()..text.len().cast_signed());
     Ok(source)
 }
 
