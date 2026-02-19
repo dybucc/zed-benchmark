@@ -1,3 +1,5 @@
+#![feature(if_let_guard)]
+
 use std::{
     hash::{Hash, Hasher},
     ops::Not,
@@ -26,11 +28,11 @@ impl Hash for HashedEdit {
 }
 
 #[inline]
-pub fn bench_modified(edits: Vec<Vec<(Edit, bool)>>) {
-    for edit in edits {
+pub fn bench_modified(edits: Vec<(Vec<Edit>, bool)>) {
+    for (edit, is_active_entry) in edits {
         let (edits, snippet_edits) = edit.into_iter().fold(
             (HashSet::default(), HashSet::default()),
-            |(mut edits, mut snippet_edits), (edit, is_active_entry)| {
+            |(mut edits, mut snippet_edits), edit| {
                 match edit {
                     Edit::Plain(edit) => {
                         let edit = HashedEdit(edit);
@@ -68,11 +70,11 @@ pub fn bench_modified(edits: Vec<Vec<(Edit, bool)>>) {
 }
 
 #[inline]
-pub fn bench_original(edits: Vec<Vec<(Edit, bool)>>) {
-    for edit in edits {
+pub fn bench_original(edits: Vec<(Vec<Edit>, bool)>) {
+    for (edit, is_active_entry) in edits {
         let (mut edits, mut snippet_edits) = (vec![], vec![]);
 
-        for (edit, is_active_entry) in edit {
+        for edit in edit {
             match edit {
                 Edit::Plain(edit) => {
                     if !edits.contains(&edit) {
