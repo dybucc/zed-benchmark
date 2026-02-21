@@ -4,43 +4,37 @@ use std::{
 };
 
 use gix::{
-    Blob, ObjectId, Repository, Tree, bstr::BString, diff::tree_with_rewrites::Change,
-    progress::Discard,
+    Blob, ObjectId, Repository, Tree, bstr::BString, commitgraph::file::Commit,
+    diff::tree_with_rewrites::Change, oid, progress::Discard,
 };
 use imara_diff::{Algorithm, Diff, InternedInput};
 use lsp_types::{
     AnnotatedTextEdit, Edit, Position, Range, SnippetTextEdit, StringValue, StringValueKind,
     TextEdit,
 };
+use rand::{
+    RngExt,
+    distr::{Distribution, Uniform},
+    rngs::ThreadRng,
+};
 use tempfile::TempDir;
 
 #[expect(
     clippy::must_use_candidate,
-    reason = "Not using the return function is not a bug."
+    reason = "Not using the return value is not a bug."
 )]
 pub fn produce_edits() -> Vec<(Vec<Edit>, bool)> {
-    // 1. Get two revisions from the Zed worktree.
-    // 2. Diff the revisions.
-    // 3. Parse the contents of the revisions into an intermediate
-    //    representation that still contains all git-specifics but appends into
-    //    a two-tuple the git info and a boolean indicating whether the affected
-    //    file/index in the worktree is deemed the active entry.
-    // 4. Load into memory the contents of affected files during diffing for
-    //    both revisions.
-    // 5. Diff each pair of file buffers and produce one final representation
-    //    with the results of the diff and the `active_entry` flag.
-    // 6. Parse this representation into `lsp_types::Edit`s.
-    // 7. Return the container of `lsp_types::Edit`s.
+    let mut rng = rand::rng();
     let repo_path = new_repo_path();
     let repo = clone_repo(repo_path.path());
+    let target_commit = select_commit(&repo, &mut rng);
     let (head, rev) = get_commits(&repo);
     let revs_diff = diff_revisions(&repo, &head, &rev);
     let changes_ir = parse_ir(revs_diff);
     let blobs = into_blobs(&changes_ir, &head, &rev);
     let diff = diff_blobs(blobs);
-    let edits = into_edits(diff);
 
-    panic!("reached end of current work");
+    into_edits(diff, &mut rng);
 }
 
 fn new_repo_path() -> TempDir {
@@ -58,6 +52,19 @@ fn clone_repo(repo_path: &Path) -> Repository {
         .0
 }
 
+fn select_commit<'a, 'b>(repo: &'a Repository, rng: &'b mut ThreadRng) -> Commit<'a> {
+    let commit_graph = repo.commit_graph().expect(
+        "the commit graph should be available if the zed folks haven't disabled it in their git \
+        config",
+    );
+    let mut commits: Vec<_> = commit_graph.iter_commits().take(100).collect();
+    let selected_commit = rng.random_range(0..=100);
+
+    commits.try_remove(selected_commit).expect(
+        "the selected commit should be within the range of prior selected commits (i.e. 100)",
+    )
+}
+
 fn get_commits(repo: &Repository) -> (Tree<'_>, Tree<'_>) {
     (
         repo.head_tree().expect("repo head should be available"),
@@ -66,7 +73,7 @@ fn get_commits(repo: &Repository) -> (Tree<'_>, Tree<'_>) {
                 ObjectId::from_hex(b"da2d4ca5d9373dcfc1812125b262ae13769c35b8")
                     .expect("repo commit sha sourced directly from remote should be valid"),
             )
-            .expect("repo commit is currently a valid object; maybe something chnaged on the zed github side")
+            .expect("repo commit is currently a valid object; maybe something chnaged on the zed github")
             .peel_to_tree()
             .expect("repo commit is currently valid and bound to a tree revision")
             .id,
@@ -198,14 +205,15 @@ fn diff_blobs(blobs: Vec<(Blob, Blob, bool)>) -> Vec<(String, Diff, bool)> {
     )
 }
 
-fn into_edits(diff: Vec<(String, Diff, bool)>) -> Vec<(Vec<Edit>, bool)> {
-    enum Choice {
+fn into_edits(diff: Vec<(String, Diff, bool)>, rng: &mut ThreadRng) -> Vec<(Vec<Edit>, bool)> {
+    #[derive(Debug)]
+    enum EditChoice {
         Plain,
         Annotated,
         Snippet,
     }
 
-    impl Choice {
+    impl EditChoice {
         fn new(input: usize) -> Option<Self> {
             match input {
                 0 => Some(Self::Plain),
@@ -217,33 +225,35 @@ fn into_edits(diff: Vec<(String, Diff, bool)>) -> Vec<(Vec<Edit>, bool)> {
     }
 
     let len = diff.len();
+    let distr = Uniform::try_from(0..3)
+        .expect("shouldn't fail because the range is const and not ill-formed");
 
     diff.into_iter().fold(
         Vec::with_capacity(len),
         |mut container, (head_string, diff, is_active_entry)| {
-            let hunks: Vec<_> = diff
+            let edits: Vec<_> = diff
                 .hunks()
                 .map(|hunk| {
                     let head_range = hunk.after;
                     let head_string = head_string
                         .lines()
                         .enumerate()
-                        .skip_while(|(line_num, _)| line_num.lt(&(head_range.start as usize)))
-                        .take_while(|(line_num, _)| line_num.lt(&(head_range.end as usize)))
+                        .skip_while(|(line_num, _)| *line_num < head_range.start as usize)
+                        .take_while(|(line_num, _)| *line_num < head_range.end as usize)
                         .map(|(_, string)| string)
                         .collect::<String>();
-                    let edit_choice =
-                        Choice::new(todo!("Get a random number in the range 0-2.")).unwrap();
+                    let edit_choice = EditChoice::new(distr.sample(rng))
+                        .expect("the distribution should have produced a number within bounds");
 
                     match edit_choice {
-                        Choice::Plain => Edit::Plain(TextEdit {
+                        EditChoice::Plain => Edit::Plain(TextEdit {
                             range: Range::new(
                                 Position::new(head_range.start, u32::MIN),
                                 Position::new(head_range.end, u32::MAX),
                             ),
                             new_text: head_string,
                         }),
-                        Choice::Annotated => Edit::Annotated(AnnotatedTextEdit {
+                        EditChoice::Annotated => Edit::Annotated(AnnotatedTextEdit {
                             text_edit: TextEdit {
                                 range: Range::new(
                                     Position::new(head_range.start, u32::MIN),
@@ -253,7 +263,7 @@ fn into_edits(diff: Vec<(String, Diff, bool)>) -> Vec<(Vec<Edit>, bool)> {
                             },
                             annotation_id: String::new(),
                         }),
-                        Choice::Snippet => Edit::Snippet(SnippetTextEdit {
+                        EditChoice::Snippet => Edit::Snippet(SnippetTextEdit {
                             range: Range::new(
                                 Position::new(head_range.start, u32::MIN),
                                 Position::new(head_range.end, u32::MAX),
@@ -268,7 +278,7 @@ fn into_edits(diff: Vec<(String, Diff, bool)>) -> Vec<(Vec<Edit>, bool)> {
                 })
                 .collect();
 
-            container.push((hunks, is_active_entry));
+            container.push((edits, is_active_entry));
 
             container
         },

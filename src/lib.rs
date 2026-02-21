@@ -1,4 +1,4 @@
-#![feature(if_let_guard)]
+#![feature(vec_try_remove)]
 
 use std::{
     hash::{Hash, Hasher},
@@ -30,7 +30,7 @@ impl Hash for HashedEdit {
 #[inline]
 pub fn bench_modified(edits: Vec<(Vec<Edit>, bool)>) {
     for (edit, is_active_entry) in edits {
-        let (edits, snippet_edits) = edit.into_iter().fold(
+        edit.into_iter().fold(
             (HashSet::default(), HashSet::default()),
             |(mut edits, mut snippet_edits), edit| {
                 match edit {
@@ -42,25 +42,21 @@ pub fn bench_modified(edits: Vec<(Vec<Edit>, bool)>) {
                         let edit = HashedEdit(edit.text_edit);
                         (edits.contains(&edit)).not().then(|| edits.insert(edit));
                     }
-                    Edit::Snippet(edit) => {
-                        match Snippet::parse(&edit.snippet.value) {
-                            Ok(snippet) if is_active_entry => {
-                                snippet_edits.insert((edit.range, snippet));
-                            }
-                            // Since this buffer is not focused, apply a normal
-                            // edit.
-                            Ok(snippet) => {
-                                let new_edit = HashedEdit(TextEdit {
-                                    range: edit.range,
-                                    new_text: snippet.text,
-                                });
-                                (edits.contains(&new_edit))
-                                    .not()
-                                    .then(|| edits.insert(new_edit));
-                            }
-                            _ => (),
+                    Edit::Snippet(edit) => match Snippet::parse(&edit.snippet.value) {
+                        Ok(snippet) if is_active_entry => {
+                            snippet_edits.insert((edit.range, snippet));
                         }
-                    }
+                        Ok(snippet) => {
+                            let new_edit = HashedEdit(TextEdit {
+                                range: edit.range,
+                                new_text: snippet.text,
+                            });
+                            (edits.contains(&new_edit))
+                                .not()
+                                .then(|| edits.insert(new_edit));
+                        }
+                        _ => (),
+                    },
                 }
 
                 (edits, snippet_edits)
@@ -94,8 +90,6 @@ pub fn bench_original(edits: Vec<(Vec<Edit>, bool)>) {
                     if is_active_entry {
                         snippet_edits.push((edit.range, snippet));
                     } else {
-                        // Since this buffer is not focused, apply a normal
-                        // edit.
                         let new_edit = TextEdit {
                             range: edit.range,
                             new_text: snippet.text,
