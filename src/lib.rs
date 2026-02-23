@@ -10,10 +10,7 @@ use rustc_hash::FxHashSet;
 
 use crate::snippet::Snippet;
 
-mod benchmark_utils;
 mod snippet;
-
-pub use benchmark_utils::produce_edits;
 
 type HashSet<T> = FxHashSet<T>;
 

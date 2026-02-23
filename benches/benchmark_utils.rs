@@ -1,11 +1,11 @@
 use std::{
     path::{Path, PathBuf},
+    result::Result,
     sync::atomic::AtomicBool,
 };
 
 use gix::{
-    Blob, ObjectId, Repository, Tree, bstr::BString, commitgraph::file::Commit,
-    diff::tree_with_rewrites::Change, oid, progress::Discard,
+    Blob, Repository, Tree, bstr::BString, diff::tree_with_rewrites::Change, progress::Discard,
 };
 use imara_diff::{Algorithm, Diff, InternedInput};
 use lsp_types::{
@@ -23,25 +23,23 @@ use tempfile::TempDir;
     clippy::must_use_candidate,
     reason = "Not using the return value is not a bug."
 )]
-pub fn produce_edits() -> Vec<(Vec<Edit>, bool)> {
-    let mut rng = rand::rng();
-    let repo_path = new_repo_path();
-    let repo = clone_repo(repo_path.path());
-    let target_commit = select_commit(&repo, &mut rng);
-    let (head, rev) = get_commits(&repo);
-    let revs_diff = diff_revisions(&repo, &head, &rev);
-    let changes_ir = parse_ir(revs_diff);
-    let blobs = into_blobs(&changes_ir, &head, &rev);
-    let diff = diff_blobs(blobs);
-
-    into_edits(diff, &mut rng);
-}
-
-fn new_repo_path() -> TempDir {
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "It's a personal benchmark so I just know what's going on."
+)]
+pub fn new_repo_path() -> TempDir {
     tempfile::tempdir().expect("default tmpdir should be valid")
 }
 
-fn clone_repo(repo_path: &Path) -> Repository {
+#[expect(
+    clippy::must_use_candidate,
+    reason = "Not using the return value is not a bug."
+)]
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "It's a personal benchmark so I just know what's going on."
+)]
+pub fn clone_repo(repo_path: &Path) -> Repository {
     gix::prepare_clone("https://github.com/zed-industries/zed.git", repo_path)
         .expect("repo should be valid")
         .fetch_then_checkout(Discard, &AtomicBool::new(false))
@@ -52,34 +50,49 @@ fn clone_repo(repo_path: &Path) -> Repository {
         .0
 }
 
-fn select_commit<'a, 'b>(repo: &'a Repository, rng: &'b mut ThreadRng) -> Commit<'a> {
-    let commit_graph = repo.commit_graph().expect(
-        "the commit graph should be available if the zed folks haven't disabled it in their git \
-        config",
-    );
-    let mut commits: Vec<_> = commit_graph.iter_commits().take(100).collect();
-    let selected_commit = rng.random_range(0..=100);
+pub fn produce_edits(repo: &Repository) -> Vec<(Vec<Edit>, bool)> {
+    let mut rng = rand::rng();
 
-    commits.try_remove(selected_commit).expect(
-        "the selected commit should be within the range of prior selected commits (i.e. 100)",
-    )
+    let rev = get_rev_tree(repo, &mut rng);
+    let head = get_head_tree(repo);
+    let revs_diff = diff_revisions(repo, &head, &rev);
+    let changes_ir = parse_ir(revs_diff);
+    let blobs = into_blobs(&changes_ir, &head, &rev);
+    let diff = diff_blobs(blobs);
+
+    into_edits(diff, &mut rng)
 }
 
-fn get_commits(repo: &Repository) -> (Tree<'_>, Tree<'_>) {
-    (
-        repo.head_tree().expect("repo head should be available"),
-        repo.find_tree(
-            repo.find_object(
-                ObjectId::from_hex(b"da2d4ca5d9373dcfc1812125b262ae13769c35b8")
-                    .expect("repo commit sha sourced directly from remote should be valid"),
-            )
-            .expect("repo commit is currently a valid object; maybe something chnaged on the zed github")
-            .peel_to_tree()
-            .expect("repo commit is currently valid and bound to a tree revision")
-            .id,
-        )
-        .expect("tree from repo commit sha sourced directly from remote should be valid"),
-    )
+fn get_rev_tree<'a>(repo: &'a Repository, rng: &mut ThreadRng) -> Tree<'a> {
+    let commit = repo
+        .references()
+        .expect("the repo should have valid references")
+        .prefixed("refs/heads/main")
+        .expect("the repo shouldn't have invalid (pseudo) references")
+        .find_map(|e| e.ok().iter_mut().find_map(|e| e.peel_to_commit().ok()))
+        .expect("the head ref should point to the head of the main branch");
+    let mut commits: Vec<_> = commit
+        .ancestors()
+        .all()
+        .expect("this head ref should point to the parent commit and so on in the main branch")
+        .filter_map(Result::ok)
+        .collect();
+
+    debug_assert!(commits.len() > 100);
+
+    // We pick among the first commits because there's larger chances of finding
+    // pure modifications (which are the only type of git change we consider for
+    // this benchmark,) rather than deletions, rewrites, or additions.
+    commits
+        .remove(rng.random_range(0..100))
+        .object()
+        .expect("converting back into the odb object should be infallible")
+        .tree()
+        .expect("the selected commit should point to a valid tree in the repo")
+}
+
+fn get_head_tree(repo: &Repository) -> Tree<'_> {
+    repo.head_tree().expect("repo head should be available")
 }
 
 fn diff_revisions(repo: &Repository, head: &Tree, other: &Tree) -> Vec<Change> {
@@ -102,7 +115,10 @@ fn parse_ir(changes: Vec<Change>) -> Vec<(BString, bool)> {
                         entry_mode,
                         ..
                     } if active_entry.is_none()
-                        && previous_entry_mode.eq(&entry_mode)
+                        && {
+                            // To avoid symlinks.
+                            previous_entry_mode.eq(&entry_mode)
+                        }
                         && entry_mode.is_blob() =>
                     {
                         active_entry = Some(location.clone());
@@ -283,21 +299,4 @@ fn into_edits(diff: Vec<(String, Diff, bool)>, rng: &mut ThreadRng) -> Vec<(Vec<
             container
         },
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::produce_edits;
-
-    #[test]
-    #[should_panic = "reached end"]
-    fn it_works() {
-        produce_edits();
-    }
-
-    #[test]
-    #[ignore = "Only used for the purposes of inspecting an in-progress git-clone operation."]
-    fn test_loc() {
-        eprintln!("{}", tempfile::env::temp_dir().display());
-    }
 }
