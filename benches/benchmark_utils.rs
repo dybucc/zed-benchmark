@@ -19,6 +19,8 @@ use rand::{
 };
 use tempfile::TempDir;
 
+const ZED_REPO: &str = "https://github.com/zed-industries/zed.git";
+
 #[expect(
     clippy::must_use_candidate,
     reason = "Not using the return value is not a bug."
@@ -40,7 +42,7 @@ pub fn new_repo_path() -> TempDir {
     reason = "It's a personal benchmark so I just know what's going on."
 )]
 pub fn clone_repo(repo_path: &Path) -> Repository {
-    gix::prepare_clone("https://github.com/zed-industries/zed.git", repo_path)
+    gix::prepare_clone(ZED_REPO, repo_path)
         .expect("repo should be valid")
         .fetch_then_checkout(Discard, &AtomicBool::new(false))
         .expect("repo fetch should be infallible")
